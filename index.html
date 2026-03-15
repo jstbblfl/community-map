@@ -1039,38 +1039,48 @@ function showContent() {
 async function loadDemographics(latlng) {
   const { lat, lng } = latlng;
 
-  // Place marker
-  if (clickMarker) map.removeLayer(clickMarker);
-  clickMarker = L.circleMarker(latlng, {
-    radius: 8, color: '#63b3ed', fillColor: '#63b3ed',
-    fillOpacity: 0.3, weight: 2,
-  }).addTo(map);
+  // Remove previous highlight
+  if (clickMarker) { map.removeLayer(clickMarker); clickMarker = null; }
 
   showLoading('Locating census tract…');
 
   try {
-    // Step 1 – Census TIGERweb REST API: coordinates → FIPS codes (CORS-enabled)
+    // Step 1 – Census TIGERweb REST API: coordinates → tract polygon + FIPS codes
     document.getElementById('loading-step').textContent = 'Step 1/3 · Locating census tract…';
 
     const tigerParams = new URLSearchParams({
-      geometry:     `${lng},${lat}`,
-      geometryType: 'esriGeometryPoint',
-      inSR:         '4326',
-      spatialRel:   'esriSpatialRelIntersects',
-      outFields:    'STATE,COUNTY,TRACT,BASENAME,NAME',
-      returnGeometry: 'false',
-      f:            'json',
+      geometry:        `${lng},${lat}`,
+      geometryType:    'esriGeometryPoint',
+      inSR:            '4326',
+      outSR:           '4326',
+      spatialRel:      'esriSpatialRelIntersects',
+      outFields:       'STATE,COUNTY,TRACT,BASENAME,NAME',
+      returnGeometry:  'true',
+      f:               'geojson',
     });
     const tigerResp = await fetch(`${TIGERWEB}?${tigerParams}`);
     if (!tigerResp.ok) throw new Error(`TIGERweb HTTP ${tigerResp.status}`);
     const tigerData = await tigerResp.json();
 
-    const attrs = tigerData?.features?.[0]?.attributes;
-    if (!attrs) {
+    const feature = tigerData?.features?.[0];
+    if (!feature) {
       showError('No census tract found at this location. Try clicking on a US land area.');
       return;
     }
 
+    // Draw the actual tract polygon as the selection highlight
+    clickMarker = L.geoJSON(feature, {
+      style: {
+        color:       '#1a73e8',
+        weight:      2.5,
+        fillColor:   '#1a73e8',
+        fillOpacity: 0.12,
+        opacity:     1,
+      },
+      interactive: false,
+    }).addTo(map);
+
+    const attrs    = feature.properties;
     const state    = attrs.STATE;
     const county   = attrs.COUNTY;
     const tractId  = attrs.TRACT;
@@ -1157,11 +1167,11 @@ async function loadDemographics(latlng) {
       raceBarsEl.appendChild(row);
     }
 
-    // Popup on marker
-    clickMarker.bindPopup(
-      `<div class="demo-popup"><b>${areaName}</b><br/>Income: ${incomeVal > 0 ? '$'+incomeVal.toLocaleString() : 'N/A'}</div>`,
-      { closeButton: false }
-    ).openPopup();
+    // Popup at click point (centered on the tract polygon)
+    L.popup({ closeButton: false })
+      .setLatLng(latlng)
+      .setContent(`<div class="demo-popup"><b>${areaName}</b><br/>Income: ${incomeVal > 0 ? '$'+incomeVal.toLocaleString() : 'N/A'}</div>`)
+      .openOn(map);
 
     showContent();
 
