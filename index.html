@@ -568,7 +568,8 @@ L.tileLayer(
 
 let activeChoro     = null;   // current Leaflet GeoJSON choropleth layer
 let activeLayerType = null;   // 'income' | 'race' | 'diversity' | null
-let clickMarker     = null;
+let clickMarker     = null;   // tract polygon highlight
+let addressPin      = null;   // point marker for address searches
 let cachedCountyGeo = null;   // county TopoJSON → GeoJSON (fetched once)
 let choroRefreshTimer = null;
 
@@ -945,6 +946,11 @@ function selectPrediction(pred) {
                   : types.includes('administrative_area_level_1') ? 7 : 14;
 
       map.setView(latlng, zoom);
+
+      // Drop a pin at the exact address location
+      if (addressPin) { map.removeLayer(addressPin); addressPin = null; }
+      addressPin = L.marker(latlng).addTo(map);
+
       loadDemographics(latlng);
     }
   );
@@ -1166,12 +1172,6 @@ async function loadDemographics(latlng) {
       `;
       raceBarsEl.appendChild(row);
     }
-
-    // Popup at click point (centered on the tract polygon)
-    L.popup({ closeButton: false })
-      .setLatLng(latlng)
-      .setContent(`<div class="demo-popup"><b>${areaName}</b><br/>Income: ${incomeVal > 0 ? '$'+incomeVal.toLocaleString() : 'N/A'}</div>`)
-      .openOn(map);
 
     showContent();
 
