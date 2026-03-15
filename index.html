@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Community Demographics Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+      background: #fff;
+      color: #3c4043;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────────── */
+    #sidebar {
+      width: 340px;
+      min-width: 340px;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #e8eaed;
+      z-index: 1000;
+      overflow-y: auto;
+      box-shadow: 2px 0 6px rgba(0,0,0,0.08);
+    }
+
+    #sidebar-header {
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid #e8eaed;
+      background: #fff;
+    }
+
+    #sidebar-header h1 {
+      font-size: 1.05rem;
+      font-weight: 500;
+      color: #1a73e8;
+      letter-spacing: 0;
+      margin-bottom: 3px;
+    }
+
+    #sidebar-header p {
+      font-size: 0.75rem;
+      color: #70757a;
+    }
+
+    /* Search */
+    #search-section {
+      padding: 14px 16px;
+      border-bottom: 1px solid #e8eaed;
+    }
+
+    #search-section label {
+      font-size: 0.68rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #70757a;
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    #search-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    #address-input {
+      flex: 1;
+      background: #f1f3f4;
+      border: 1px solid transparent;
+      border-radius: 24px;
+      color: #3c4043;
+      font-size: 0.875rem;
+      font-family: inherit;
+      padding: 9px 16px;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    }
+
+    #address-input:focus {
+      background: #fff;
+      border-color: #1a73e8;
+      box-shadow: 0 1px 6px rgba(32,33,36,0.12);
+    }
+
+    #address-input::placeholder { color: #9aa0a6; }
+
+    #search-btn {
+      background: #1a73e8;
+      border: none;
+      border-radius: 24px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 0.84rem;
+      font-weight: 500;
+      font-family: inherit;
+      padding: 9px 18px;
+      transition: background 0.15s, box-shadow 0.15s;
+      white-space: nowrap;
+    }
+
+    #search-btn:hover {
+      background: #1765cc;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+
+    #search-status {
+      font-size: 0.74rem;
+      color: #c5221f;
+      margin-top: 6px;
+      min-height: 16px;
+    }
+
+    /* Autocomplete dropdown */
+    #search-wrap { position: relative; }
+
+    #suggestions {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      z-index: 9999;
+      box-shadow: 0 4px 16px rgba(32,33,36,0.22);
+      max-height: 280px;
+      overflow-y: auto;
+    }
+
+    #suggestions.open { display: block; }
+
+    .suggestion-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 11px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid #f1f3f4;
+      transition: background 0.1s;
+    }
+
+    .suggestion-item:last-child { border-bottom: none; }
+
+    .suggestion-item::before {
+      content: '';
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
+      background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%239aa0a6'%3E%3Cpath d='M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z'/%3E%3C/svg%3E") center/contain no-repeat;
+    }
+
+    .suggestion-item:hover,
+    .suggestion-item.active { background: #f8f9fa; }
+
+    .suggestion-text { min-width: 0; }
+
+    .suggestion-main {
+      font-size: 0.84rem;
+      color: #3c4043;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .suggestion-sub {
+      font-size: 0.72rem;
+      color: #70757a;
+      margin-top: 1px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .suggestion-no-results {
+      padding: 14px 16px;
+      font-size: 0.82rem;
+      color: #70757a;
+    }
+
+    /* Layer switcher */
+    #layers-section {
+      padding: 14px 16px;
+      border-bottom: 1px solid #e8eaed;
+    }
+
+    #layers-section label.section-label,
+    #demo-section label.section-label {
+      font-size: 0.68rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #70757a;
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    .layer-btn {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      margin-bottom: 4px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      border: 1px solid #e8eaed;
+      background: #fff;
+      color: #3c4043;
+      cursor: pointer;
+      font-size: 0.84rem;
+      font-weight: 400;
+      font-family: inherit;
+      text-align: left;
+      transition: all 0.12s;
+    }
+
+    .layer-btn:hover {
+      background: #f8f9fa;
+      border-color: #dadce0;
+    }
+
+    .layer-btn.active {
+      background: #e8f0fe;
+      border-color: #c5d9f7;
+      color: #1a73e8;
+      font-weight: 500;
+    }
+
+    .layer-btn .layer-icon {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 10px;
+      flex-shrink: 0;
+    }
+
+    /* Demographics panel */
+    #demo-section {
+      flex: 1;
+      padding: 14px 16px;
+    }
+
+    #demo-placeholder {
+      font-size: 0.83rem;
+      color: #70757a;
+      line-height: 1.6;
+    }
+
+    #demo-placeholder .arrow { color: #1a73e8; }
+
+    #demo-content { display: none; }
+
+    #demo-location {
+      font-size: 0.78rem;
+      color: #70757a;
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+
+    .demo-card {
+      background: #f8f9fa;
+      border: 1px solid #e8eaed;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 10px;
+    }
+
+    .demo-card h3 {
+      font-size: 0.68rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #70757a;
+      margin-bottom: 10px;
+    }
+
+    .income-value {
+      font-size: 1.9rem;
+      font-weight: 400;
+      color: #137333;
+      letter-spacing: -0.01em;
+    }
+
+    .income-sub {
+      font-size: 0.73rem;
+      color: #70757a;
+      margin-top: 2px;
+    }
+
+    .race-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 7px;
+      gap: 10px;
+    }
+
+    .race-label {
+      font-size: 0.77rem;
+      color: #3c4043;
+      width: 130px;
+      flex-shrink: 0;
+    }
+
+    .race-bar-wrap {
+      flex: 1;
+      background: #e8eaed;
+      border-radius: 4px;
+      height: 7px;
+      overflow: hidden;
+    }
+
+    .race-bar {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+
+    .race-pct {
+      font-size: 0.77rem;
+      font-weight: 500;
+      color: #3c4043;
+      width: 38px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    #demo-loading {
+      display: none;
+      text-align: center;
+      padding: 24px 0;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 26px;
+      height: 26px;
+      border: 3px solid #e8eaed;
+      border-top-color: #1a73e8;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text {
+      font-size: 0.77rem;
+      color: #70757a;
+      margin-top: 10px;
+    }
+
+    #demo-error {
+      display: none;
+      background: #fce8e6;
+      border: 1px solid #f5c6c4;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 0.8rem;
+      color: #c5221f;
+      line-height: 1.5;
+    }
+
+    /* ── Map ──────────────────────────────────────────────────── */
+    #map {
+      flex: 1;
+      cursor: crosshair;
+    }
+
+    /* Leaflet overrides — Google Maps style */
+    .leaflet-control-zoom {
+      border: none !important;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3) !important;
+    }
+
+    .leaflet-control-zoom a {
+      background: #fff !important;
+      color: #666 !important;
+      border-color: #e8eaed !important;
+      font-weight: 400 !important;
+    }
+
+    .leaflet-control-zoom a:hover { background: #f8f9fa !important; }
+
+    .leaflet-control-attribution {
+      background: rgba(255,255,255,0.85) !important;
+      color: #70757a !important;
+      font-size: 0.68rem !important;
+    }
+
+    .leaflet-control-attribution a { color: #1a73e8 !important; }
+
+    .demo-popup { font-size: 0.82rem; color: #3c4043; }
+
+    .leaflet-popup-content-wrapper {
+      background: #fff !important;
+      border-radius: 8px !important;
+      color: #3c4043 !important;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2) !important;
+      border: none !important;
+    }
+
+    .leaflet-popup-tip { background: #fff !important; }
+  </style>
+</head>
+<body>
+
+<!-- ═══ SIDEBAR ═══════════════════════════════════════════════ -->
+<div id="sidebar">
+
+  <div id="sidebar-header">
+    <h1>Community Demographics</h1>
+    <p>Click anywhere on the map to load census data</p>
+  </div>
+
+  <!-- Address Search -->
+  <div id="search-section">
+    <label>Search Address</label>
+    <div id="search-wrap">
+      <div id="search-row">
+        <input id="address-input" type="text" placeholder="Start typing an address…" autocomplete="off" spellcheck="false" />
+        <button id="search-btn">Go</button>
+      </div>
+      <div id="suggestions"></div>
+    </div>
+    <div id="search-status"></div>
+  </div>
+
+  <!-- Layer Switcher -->
+  <div id="layers-section">
+    <label class="section-label">Map Layers</label>
+    <button class="layer-btn active" data-layer="none">
+      <span class="layer-icon" style="background:#4a5568"></span>Base Map Only
+    </button>
+    <button class="layer-btn" data-layer="race">
+      <span class="layer-icon" style="background:#f6ad55"></span>Race &amp; Ethnicity
+    </button>
+    <button class="layer-btn" data-layer="income">
+      <span class="layer-icon" style="background:#68d391"></span>Median Income
+    </button>
+    <button class="layer-btn" data-layer="diversity">
+      <span class="layer-icon" style="background:#9f7aea"></span>Diversity Index
+    </button>
+  </div>
+
+  <!-- Demographics Panel -->
+  <div id="demo-section">
+    <label class="section-label">Demographics</label>
+
+    <div id="demo-placeholder">
+      <span class="arrow">↗</span> Click anywhere on the map to see<br />
+      race &amp; income data for that location.
+    </div>
+
+    <div id="demo-loading">
+      <div class="spinner"></div>
+      <div class="loading-text" id="loading-step">Fetching census data…</div>
+    </div>
+
+    <div id="demo-error"></div>
+
+    <div id="demo-content">
+      <div id="demo-location"></div>
+
+      <div class="demo-card">
+        <h3>Median Household Income</h3>
+        <div class="income-value" id="income-value">—</div>
+        <div class="income-sub">ACS 5-Year Estimate · Census Tract</div>
+      </div>
+
+      <div class="demo-card">
+        <h3>Race &amp; Ethnicity</h3>
+        <div id="race-bars"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══ MAP ═══════════════════════════════════════════════════ -->
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAoLVpauPJi-aQUnbgDHB8rahwmXXDeizI&libraries=places"></script>
+<script>
+// ── Config ────────────────────────────────────────────────────
+const TIGERWEB   = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2022/MapServer/6/query';
+const CENSUS_ACS = 'https://api.census.gov/data/2022/acs/acs5';
+
+const RACE_COLORS = {
+  'White (non-Hispanic)':              '#1a73e8',
+  'Black or African American':         '#e37400',
+  'Hispanic or Latino':                '#d93025',
+  'Asian':                             '#1e8e3e',
+  'Two or More Races':                 '#9334e6',
+  'American Indian / Alaska Native':   '#f29900',
+  'Native Hawaiian / Pacific Islander':'#00897b',
+  'Other':                             '#70757a',
+};
+
+// JusticeMap tile layers
+const TILE_LAYERS = {
+  none: null,
+  race: L.tileLayer(
+    'https://www.justicemap.org/tile/county/race/{z}/{x}/{y}.png',
+    { opacity: 0.65, attribution: 'JusticeMap.org' }
+  ),
+  income: L.tileLayer(
+    'https://www.justicemap.org/tile/county/income/{z}/{x}/{y}.png',
+    { opacity: 0.65, attribution: 'JusticeMap.org' }
+  ),
+  diversity: L.tileLayer(
+    'https://www.justicemap.org/tile/county/diversity/{z}/{x}/{y}.png',
+    { opacity: 0.65, attribution: 'JusticeMap.org' }
+  ),
+};
+
+// ── Map init ──────────────────────────────────────────────────
+const map = L.map('map', {
+  center: [39.5, -98.35],
+  zoom: 4,
+  zoomControl: true,
+});
+
+L.tileLayer(
+  'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+  {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 19,
+  }
+).addTo(map);
+
+let activeOverlay = null;
+let clickMarker   = null;
+
+// ── Layer switcher ────────────────────────────────────────────
+document.querySelectorAll('.layer-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.layer;
+
+    document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    if (activeOverlay) { map.removeLayer(activeOverlay); activeOverlay = null; }
+    if (TILE_LAYERS[key]) { TILE_LAYERS[key].addTo(map); activeOverlay = TILE_LAYERS[key]; }
+  });
+});
+
+// ── Google Places Autocomplete ────────────────────────────────
+const inputEl      = document.getElementById('address-input');
+const suggestEl    = document.getElementById('suggestions');
+const searchStatus = document.getElementById('search-status');
+const searchWrap   = document.getElementById('search-wrap');
+
+let debounceTimer   = null;
+let predictions     = [];   // current google.maps.places.AutocompletePrediction[]
+let activeIdx       = -1;
+let autoSvc         = null;
+let placesSvc       = null;
+
+// Init Google services once the Maps API is ready
+function initGoogleServices() {
+  autoSvc   = new google.maps.places.AutocompleteService();
+  // PlacesService requires a DOM node; use a hidden div
+  const div = document.createElement('div');
+  placesSvc = new google.maps.places.PlacesService(div);
+}
+
+if (window.google?.maps) {
+  initGoogleServices();
+} else {
+  // Maps API loads async — wait for it
+  const waitGmaps = setInterval(() => {
+    if (window.google?.maps?.places) { clearInterval(waitGmaps); initGoogleServices(); }
+  }, 100);
+}
+
+// ── Predictions ───────────────────────────────────────────────
+function fetchPredictions(q) {
+  if (!autoSvc || q.length < 2) { closeSuggestions(); return; }
+
+  autoSvc.getPlacePredictions(
+    { input: q, componentRestrictions: { country: 'us' } },
+    (preds, status) => {
+      predictions = (status === google.maps.places.PlacesServiceStatus.OK && preds) ? preds : [];
+      activeIdx   = -1;
+      renderSuggestions(predictions);
+    }
+  );
+}
+
+// ── Rendering ─────────────────────────────────────────────────
+function renderSuggestions(preds) {
+  suggestEl.innerHTML = '';
+  if (!preds.length) { suggestEl.classList.remove('open'); return; }
+
+  preds.forEach((p, i) => {
+    const main = p.structured_formatting?.main_text   || p.description;
+    const sub  = p.structured_formatting?.secondary_text || '';
+    const item = document.createElement('div');
+    item.className = 'suggestion-item';
+    item.innerHTML = `
+      <div class="suggestion-text">
+        <div class="suggestion-main">${escHtml(main)}</div>
+        ${sub ? `<div class="suggestion-sub">${escHtml(sub)}</div>` : ''}
+      </div>
+    `;
+    item.addEventListener('mousedown', e => { e.preventDefault(); selectPrediction(p); });
+    item.addEventListener('mouseover',  () => setActive(i));
+    suggestEl.appendChild(item);
+  });
+
+  suggestEl.classList.add('open');
+}
+
+function setActive(idx) {
+  activeIdx = idx;
+  suggestEl.querySelectorAll('.suggestion-item').forEach((el, i) =>
+    el.classList.toggle('active', i === idx));
+}
+
+function closeSuggestions() {
+  suggestEl.classList.remove('open');
+  suggestEl.innerHTML = '';
+  activeIdx = -1;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Selection ─────────────────────────────────────────────────
+function selectPrediction(pred) {
+  clearTimeout(debounceTimer);
+  inputEl.value = pred.description;
+  closeSuggestions();
+  searchStatus.textContent = '';
+
+  placesSvc.getDetails(
+    { placeId: pred.place_id, fields: ['geometry', 'types'] },
+    (place, status) => {
+      if (status !== google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
+        searchStatus.textContent = 'Could not get coordinates for this address.';
+        searchStatus.style.color = '#e53e3e';
+        return;
+      }
+      const loc    = place.geometry.location;
+      const latlng = L.latLng(loc.lat(), loc.lng());
+
+      // Zoom: street address → 16, city → 12, state → 7
+      const types = place.types || [];
+      const zoom  = types.includes('street_address') || types.includes('premise') ? 16
+                  : types.includes('locality') ? 12
+                  : types.includes('administrative_area_level_1') ? 7 : 14;
+
+      map.setView(latlng, zoom);
+      loadDemographics(latlng);
+    }
+  );
+}
+
+function goSearch() {
+  clearTimeout(debounceTimer);
+  const q = inputEl.value.trim();
+  if (!q) return;
+
+  // Use the highlighted or first prediction if available
+  if (predictions.length > 0) {
+    selectPrediction(predictions[activeIdx >= 0 ? activeIdx : 0]);
+    return;
+  }
+
+  // No predictions yet — fetch now and take the top result
+  if (!autoSvc) { searchStatus.textContent = 'Search not ready yet.'; return; }
+  searchStatus.textContent = 'Searching…';
+  searchStatus.style.color = '#718096';
+
+  autoSvc.getPlacePredictions(
+    { input: q, componentRestrictions: { country: 'us' } },
+    (preds, status) => {
+      if (status !== google.maps.places.PlacesServiceStatus.OK || !preds?.length) {
+        searchStatus.textContent = 'Address not found.';
+        searchStatus.style.color = '#e53e3e';
+        return;
+      }
+      searchStatus.textContent = '';
+      predictions = preds;
+      selectPrediction(preds[0]);
+    }
+  );
+}
+
+// ── Events ────────────────────────────────────────────────────
+inputEl.addEventListener('input', () => {
+  const q = inputEl.value.trim();
+  searchStatus.textContent = '';
+  clearTimeout(debounceTimer);
+  if (q.length < 2) { closeSuggestions(); predictions = []; return; }
+  debounceTimer = setTimeout(() => fetchPredictions(q), 200);
+});
+
+inputEl.addEventListener('keydown', e => {
+  const items = suggestEl.querySelectorAll('.suggestion-item');
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    setActive(Math.min(activeIdx + 1, items.length - 1));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    setActive(Math.max(activeIdx - 1, 0));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    goSearch();
+  } else if (e.key === 'Escape') {
+    closeSuggestions();
+  }
+});
+
+inputEl.addEventListener('blur', e => {
+  if (e.relatedTarget && searchWrap.contains(e.relatedTarget)) return;
+  setTimeout(closeSuggestions, 150);
+});
+
+document.getElementById('search-btn').addEventListener('click', goSearch);
+
+// ── Map click → demographics ──────────────────────────────────
+map.on('click', e => loadDemographics(e.latlng));
+
+// ── Demographics loader ───────────────────────────────────────
+function showLoading(msg) {
+  document.getElementById('demo-placeholder').style.display = 'none';
+  document.getElementById('demo-content').style.display     = 'none';
+  document.getElementById('demo-error').style.display       = 'none';
+  document.getElementById('demo-loading').style.display     = 'block';
+  document.getElementById('loading-step').textContent       = msg || 'Fetching census data…';
+}
+
+function showError(msg) {
+  document.getElementById('demo-loading').style.display  = 'none';
+  document.getElementById('demo-error').style.display    = 'block';
+  document.getElementById('demo-error').textContent      = msg;
+}
+
+function showContent() {
+  document.getElementById('demo-loading').style.display  = 'none';
+  document.getElementById('demo-content').style.display  = 'block';
+}
+
+async function loadDemographics(latlng) {
+  const { lat, lng } = latlng;
+
+  // Place marker
+  if (clickMarker) map.removeLayer(clickMarker);
+  clickMarker = L.circleMarker(latlng, {
+    radius: 8, color: '#63b3ed', fillColor: '#63b3ed',
+    fillOpacity: 0.3, weight: 2,
+  }).addTo(map);
+
+  showLoading('Locating census tract…');
+
+  try {
+    // Step 1 – Census TIGERweb REST API: coordinates → FIPS codes (CORS-enabled)
+    document.getElementById('loading-step').textContent = 'Step 1/3 · Locating census tract…';
+
+    const tigerParams = new URLSearchParams({
+      geometry:     `${lng},${lat}`,
+      geometryType: 'esriGeometryPoint',
+      inSR:         '4326',
+      spatialRel:   'esriSpatialRelIntersects',
+      outFields:    'STATE,COUNTY,TRACT,BASENAME,NAME',
+      returnGeometry: 'false',
+      f:            'json',
+    });
+    const tigerResp = await fetch(`${TIGERWEB}?${tigerParams}`);
+    if (!tigerResp.ok) throw new Error(`TIGERweb HTTP ${tigerResp.status}`);
+    const tigerData = await tigerResp.json();
+
+    const attrs = tigerData?.features?.[0]?.attributes;
+    if (!attrs) {
+      showError('No census tract found at this location. Try clicking on a US land area.');
+      return;
+    }
+
+    const state    = attrs.STATE;
+    const county   = attrs.COUNTY;
+    const tractId  = attrs.TRACT;
+    const tractName = attrs.NAME || `Census Tract ${attrs.BASENAME}`;
+
+    document.getElementById('loading-step').textContent = 'Step 2/3 · Fetching ACS income data…';
+
+    // Step 2a – Median household income (B19013_001E)
+    const incomeUrl = `${CENSUS_ACS}?get=B19013_001E,NAME&for=tract:${tractId}&in=state:${state}%20county:${county}`;
+    const incomeResp = await fetch(incomeUrl);
+    if (!incomeResp.ok) throw new Error(`ACS income HTTP ${incomeResp.status}`);
+    const incomeData = await incomeResp.json();
+
+    // incomeData[0] = headers, incomeData[1] = values
+    const incomeIdx  = incomeData[0].indexOf('B19013_001E');
+    const nameIdx    = incomeData[0].indexOf('NAME');
+    const incomeVal  = parseInt(incomeData[1][incomeIdx], 10);
+    const areaName   = incomeData[1][nameIdx] || `Tract ${tractName}`;
+
+    document.getElementById('loading-step').textContent = 'Step 3/3 · Fetching ACS race data…';
+
+    // Step 2b – Race variables
+    // B03002: Hispanic/Latino origin by race
+    // _001E = total, _003E = NH White, _004E = NH Black, _006E = NH Asian,
+    // _005E = NH AIAN, _007E = NH NHPI, _008E = NH Other, _009E = NH Two+,
+    // _012E = Hispanic or Latino
+    const raceVars = 'B03002_001E,B03002_003E,B03002_004E,B03002_006E,B03002_005E,B03002_007E,B03002_008E,B03002_009E,B03002_012E';
+    const raceUrl  = `${CENSUS_ACS}?get=${raceVars}&for=tract:${tractId}&in=state:${state}%20county:${county}`;
+    const raceResp = await fetch(raceUrl);
+    if (!raceResp.ok) throw new Error(`ACS race HTTP ${raceResp.status}`);
+    const raceData = await raceResp.json();
+
+    const rh = raceData[0]; // headers
+    const rv = raceData[1]; // values
+
+    function rv_(code) { return parseInt(rv[rh.indexOf(code)], 10) || 0; }
+
+    const total    = rv_('B03002_001E');
+    const raceMap  = {
+      'White (non-Hispanic)':              rv_('B03002_003E'),
+      'Hispanic or Latino':                rv_('B03002_012E'),
+      'Black or African American':         rv_('B03002_004E'),
+      'Asian':                             rv_('B03002_006E'),
+      'Two or More Races':                 rv_('B03002_009E'),
+      'American Indian / Alaska Native':   rv_('B03002_005E'),
+      'Native Hawaiian / Pacific Islander':rv_('B03002_007E'),
+      'Other':                             rv_('B03002_008E'),
+    };
+
+    // ── Render ────────────────────────────────────────────────
+    document.getElementById('demo-location').textContent = areaName;
+
+    // Income
+    const incomeEl = document.getElementById('income-value');
+    if (incomeVal > 0) {
+      incomeEl.textContent = '$' + incomeVal.toLocaleString();
+      incomeEl.style.color = '#68d391';
+    } else {
+      incomeEl.textContent = 'N/A';
+      incomeEl.style.color = '#718096';
+    }
+
+    // Race bars
+    const raceBarsEl = document.getElementById('race-bars');
+    raceBarsEl.innerHTML = '';
+
+    const sorted = Object.entries(raceMap)
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1]);
+
+    for (const [label, count] of sorted) {
+      const pct = total > 0 ? (count / total * 100) : 0;
+      const color = RACE_COLORS[label] || '#a0aec0';
+
+      const row = document.createElement('div');
+      row.className = 'race-row';
+      row.innerHTML = `
+        <div class="race-label">${label}</div>
+        <div class="race-bar-wrap">
+          <div class="race-bar" style="width:${pct.toFixed(1)}%;background:${color}"></div>
+        </div>
+        <div class="race-pct">${pct.toFixed(1)}%</div>
+      `;
+      raceBarsEl.appendChild(row);
+    }
+
+    // Popup on marker
+    clickMarker.bindPopup(
+      `<div class="demo-popup"><b>${areaName}</b><br/>Income: ${incomeVal > 0 ? '$'+incomeVal.toLocaleString() : 'N/A'}</div>`,
+      { closeButton: false }
+    ).openPopup();
+
+    showContent();
+
+  } catch (err) {
+    console.error('Demographics error:', err);
+    showError(`Failed to load demographics: ${err.message}\n\nMake sure you're clicking on a US location.`);
+  }
+}
+</script>
+</body>
+</html>
