@@ -522,11 +522,24 @@ const RACE_COLORS = {
 // County boundaries from US Atlas (TopoJSON, ~215 KB, fetched once)
 const US_ATLAS = 'https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json';
 
+// At zoom >= TRACT_ZOOM switch from counties → census tracts
+const TRACT_ZOOM = 8;
+
+// TIGERweb layer 6 = Census Tracts (same endpoint used for point lookup)
+const TIGERWEB_TRACTS = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2022/MapServer/6/query';
+
 // Color buckets (5-step sequential, light → dark)
 const CHORO_SCALES = {
   income:    ['#edf8e9','#bae4b3','#74c476','#31a354','#006d2c'], // green
   race:      ['#eff3ff','#bdd7e7','#6baed6','#2171b5','#084594'], // blue
   diversity: ['#f2f0f7','#cbc9e2','#9e9ac8','#756bb1','#54278f'], // purple
+};
+
+// ACS variables per layer
+const ACS_VARS = {
+  income:    'B19013_001E',
+  race:      'B03002_001E,B03002_003E,B03002_004E,B03002_006E,B03002_005E,B03002_007E,B03002_009E,B03002_012E',
+  diversity: 'B03002_001E,B03002_003E,B03002_004E,B03002_006E,B03002_005E,B03002_007E,B03002_009E,B03002_012E',
 };
 
 // US state FIPS codes (excluding territories)
@@ -553,10 +566,14 @@ L.tileLayer(
   }
 ).addTo(map);
 
-let activeChoro = null;   // current Leaflet GeoJSON choropleth layer
-let clickMarker = null;
-let cachedGeo   = null;   // parsed county GeoJSON (fetched once)
-const cachedACS = {};     // { income: Map<fips,val>, race: Map<fips,val>, diversity: Map<fips,val> }
+let activeChoro     = null;   // current Leaflet GeoJSON choropleth layer
+let activeLayerType = null;   // 'income' | 'race' | 'diversity' | null
+let clickMarker     = null;
+let cachedCountyGeo = null;   // county TopoJSON → GeoJSON (fetched once)
+let choroRefreshTimer = null;
+
+// ACS cache: county-level keyed by type, tract-level keyed by "type|state|county"
+const acsCache = {};
 
 // ── Layer switcher ────────────────────────────────────────────
 document.querySelectorAll('.layer-btn').forEach(btn => {
@@ -564,159 +581,252 @@ document.querySelectorAll('.layer-btn').forEach(btn => {
     const key = btn.dataset.layer;
     document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    if (key === 'none') { clearChoropleth(); } else { showChoropleth(key); }
+    activeLayerType = key === 'none' ? null : key;
+    refreshChoropleth();
   });
+});
+
+// Refresh on pan/zoom (debounced)
+map.on('moveend zoomend', () => {
+  if (!activeLayerType) return;
+  clearTimeout(choroRefreshTimer);
+  choroRefreshTimer = setTimeout(refreshChoropleth, 400);
 });
 
 function clearChoropleth() {
   if (activeChoro) { map.removeLayer(activeChoro); activeChoro = null; }
 }
 
-// ── Choropleth rendering ──────────────────────────────────────
-async function showChoropleth(type) {
-  clearChoropleth();
-
-  // Set button to loading state
-  const btn = document.querySelector(`.layer-btn[data-layer="${type}"]`);
-  const origText = btn.innerHTML;
-  btn.innerHTML = origText.replace('</span>', '</span>Loading…');
-  btn.disabled = true;
-
-  try {
-    // 1. Fetch county boundaries (once)
-    if (!cachedGeo) cachedGeo = await fetchCountyGeo();
-
-    // 2. Fetch ACS data for this layer (once per type)
-    if (!cachedACS[type]) cachedACS[type] = await fetchACSCounties(type);
-
-    const dataMap = cachedACS[type];
-    const scale   = CHORO_SCALES[type];
-
-    // 3. Build quantile color breaks from the data
-    const vals = [...dataMap.values()].filter(v => v > 0).sort((a, b) => a - b);
-    const breaks = [0, 0.2, 0.4, 0.6, 0.8].map(p =>
-      vals[Math.floor(p * (vals.length - 1))]
-    );
-
-    function getColor(rawId) {
-      const fips = String(rawId).padStart(5, '0');
-      const v    = dataMap.get(fips);
-      if (!v || v <= 0) return '#f0f0f0';
-      for (let i = scale.length - 1; i >= 0; i--) {
-        if (v >= breaks[i]) return scale[i];
-      }
-      return scale[0];
-    }
-
-    function fmtVal(type, v) {
-      if (!v || v <= 0) return 'N/A';
-      if (type === 'income')    return '$' + v.toLocaleString();
-      if (type === 'race')      return (v * 100).toFixed(1) + '% non-white';
-      if (type === 'diversity') return (v * 100).toFixed(1) + '% diversity';
-      return v;
-    }
-
-    // 4. Add GeoJSON layer
-    activeChoro = L.geoJSON(cachedGeo, {
-      style: feature => ({
-        fillColor:   getColor(String(feature.id)),
-        fillOpacity: 0.65,
-        weight:      0.6,
-        color:       '#fff',
-        opacity:     0.5,
-      }),
-      onEachFeature: (feature, layer) => {
-        const fips = String(feature.id).padStart(5, '0');
-        const v    = dataMap.get(fips);
-        layer.bindTooltip(
-          `<b>FIPS ${fips}</b><br/>${fmtVal(type, v)}`,
-          { sticky: true, className: 'choro-tip' }
-        );
-      },
-    }).addTo(map);
-
-    // Ensure click marker stays on top
-    if (clickMarker) clickMarker.bringToFront();
-
-  } catch (err) {
-    console.error('Choropleth error:', err);
-  } finally {
-    btn.innerHTML = origText;
-    btn.disabled = false;
+function refreshChoropleth() {
+  if (!activeLayerType) { clearChoropleth(); return; }
+  if (map.getZoom() < TRACT_ZOOM) {
+    renderCountyChoropleth(activeLayerType);
+  } else {
+    renderTractChoropleth(activeLayerType);
   }
 }
 
-// ── Data fetchers ─────────────────────────────────────────────
-async function fetchCountyGeo() {
-  const resp = await fetch(US_ATLAS);
-  const topo = await resp.json();
-  // us-atlas county features have numeric `id` (FIPS) but no name property;
-  // we'll label via the ACS data tooltip anyway.
-  return topojson.feature(topo, topo.objects.counties);
+// ── Shared helpers ────────────────────────────────────────────
+function fmtVal(type, v) {
+  if (v == null || v <= 0) return 'N/A';
+  if (type === 'income')    return '$' + Math.round(v).toLocaleString();
+  if (type === 'race')      return (v * 100).toFixed(1) + '% non-white';
+  if (type === 'diversity') return (v * 100).toFixed(1) + '% diversity';
+  return String(v);
 }
 
-async function fetchACSCounties(type) {
-  // Variables per layer type
-  const vars = type === 'income'
-    ? 'B19013_001E'
-    : 'B03002_001E,B03002_003E,B03002_004E,B03002_006E,B03002_005E,B03002_007E,B03002_009E,B03002_012E';
+function buildColorFn(dataMap, type) {
+  const scale = CHORO_SCALES[type];
+  const vals  = [...dataMap.values()].filter(v => v > 0).sort((a, b) => a - b);
+  const q = p => vals[Math.max(0, Math.floor(p * (vals.length - 1)))];
+  const breaks = [q(0), q(0.2), q(0.4), q(0.6), q(0.8)];
+  return fips => {
+    const v = dataMap.get(fips);
+    if (!v || v <= 0) return '#f0f0f0';
+    for (let i = scale.length - 1; i >= 0; i--) {
+      if (v >= breaks[i]) return scale[i];
+    }
+    return scale[0];
+  };
+}
 
+function makeGeoJSONLayer(geo, dataMap, type, fipsKey) {
+  const getColor = buildColorFn(dataMap, type);
+  return L.geoJSON(geo, {
+    style: feature => ({
+      fillColor:   getColor(fipsKey(feature)),
+      fillOpacity: 0.65,
+      weight:      0.8,
+      color:       '#fff',
+      opacity:     0.6,
+    }),
+    onEachFeature: (feature, layer) => {
+      const fips = fipsKey(feature);
+      const v    = dataMap.get(fips);
+      const name = feature.properties?.name || feature.properties?.NAME ||
+                   feature.properties?.BASENAME || fips;
+      layer.bindTooltip(
+        `<b>${name}</b><br/>${fmtVal(type, v)}`,
+        { sticky: true, className: 'choro-tip' }
+      );
+    },
+  });
+}
+
+function setLayerBtnLoading(type, loading) {
+  const btn = document.querySelector(`.layer-btn[data-layer="${type}"]`);
+  if (!btn) return;
+  btn.disabled = loading;
+  // Toggle a small spinner text without destroying the icon span
+  const existing = btn.querySelector('.btn-loading');
+  if (loading && !existing) {
+    const s = document.createElement('span');
+    s.className = 'btn-loading';
+    s.textContent = ' Loading…';
+    s.style.cssText = 'font-size:0.75rem;color:#70757a;';
+    btn.appendChild(s);
+  } else if (!loading && existing) {
+    existing.remove();
+  }
+}
+
+// ── County choropleth (zoom < 8) ──────────────────────────────
+async function renderCountyChoropleth(type) {
+  clearChoropleth();
+  setLayerBtnLoading(type, true);
+  try {
+    if (!cachedCountyGeo) {
+      const resp = await fetch(US_ATLAS);
+      const topo = await resp.json();
+      cachedCountyGeo = topojson.feature(topo, topo.objects.counties);
+    }
+
+    const cacheKey = `county|${type}`;
+    if (!acsCache[cacheKey]) {
+      acsCache[cacheKey] = await fetchACSAllCounties(type);
+    }
+    const dataMap = acsCache[cacheKey];
+
+    activeChoro = makeGeoJSONLayer(
+      cachedCountyGeo, dataMap, type,
+      f => String(f.id).padStart(5, '0')
+    ).addTo(map);
+
+    if (clickMarker) clickMarker.bringToFront();
+  } catch (e) {
+    console.error('County choropleth error:', e);
+  } finally {
+    setLayerBtnLoading(type, false);
+  }
+}
+
+async function fetchACSAllCounties(type) {
+  const vars   = ACS_VARS[type];
   const result = new Map();
 
-  // Try all-county wildcard first (faster, single request)
+  // Try single wildcard call first
   try {
-    const url = `${CENSUS_ACS}?get=${vars}&for=county:*`;
-    const r   = await fetch(url);
+    const r = await fetch(`${CENSUS_ACS}?get=${vars}&for=county:*`);
     if (r.ok) {
-      const data = await r.json();
-      parseACSRows(data, type, result);
-      if (result.size > 100) return result; // success
+      const d = await r.json();
+      parseACSIntoMap(d, type, result, 'county');
+      if (result.size > 100) return result;
     }
   } catch (_) {}
 
-  // Fallback: fetch per state in parallel batches
+  // Per-state fallback
   result.clear();
-  const BATCH = 10;
-  for (let i = 0; i < STATE_FIPS.length; i += BATCH) {
-    const batch = STATE_FIPS.slice(i, i + BATCH);
-    await Promise.all(batch.map(async state => {
+  for (let i = 0; i < STATE_FIPS.length; i += 10) {
+    await Promise.all(STATE_FIPS.slice(i, i + 10).map(async st => {
       try {
-        const url = `${CENSUS_ACS}?get=${vars}&for=county:*&in=state:${state}`;
-        const r   = await fetch(url);
-        if (!r.ok) return;
-        const data = await r.json();
-        parseACSRows(data, type, result);
+        const r = await fetch(`${CENSUS_ACS}?get=${vars}&for=county:*&in=state:${st}`);
+        if (r.ok) parseACSIntoMap(await r.json(), type, result, 'county');
       } catch (_) {}
     }));
   }
   return result;
 }
 
-function parseACSRows(data, type, map) {
-  const headers = data[0];
-  const stateIdx  = headers.indexOf('state');
-  const countyIdx = headers.indexOf('county');
+// ── Tract choropleth (zoom >= 8) ──────────────────────────────
+async function renderTractChoropleth(type) {
+  clearChoropleth();
+  setLayerBtnLoading(type, true);
+  try {
+    const bounds = map.getBounds();
+    const bbox   = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+
+    // Fetch visible census tract boundaries from TIGERweb
+    const params = new URLSearchParams({
+      geometry:        bbox,
+      geometryType:    'esriGeometryEnvelope',
+      inSR:            '4326',
+      outSR:           '4326',
+      spatialRel:      'esriSpatialRelIntersects',
+      outFields:       'STATE,COUNTY,TRACT,GEOID,BASENAME',
+      returnGeometry:  'true',
+      resultRecordCount: '2000',
+      f:               'geojson',
+    });
+
+    const geoResp = await fetch(`${TIGERWEB_TRACTS}?${params}`);
+    if (!geoResp.ok) throw new Error(`TIGERweb ${geoResp.status}`);
+    const tractGeo = await geoResp.json();
+    if (!tractGeo.features?.length) return;
+
+    // Collect unique state+county combos from visible tracts
+    const countySet = new Set();
+    tractGeo.features.forEach(f => {
+      const { STATE, COUNTY } = f.properties;
+      if (STATE && COUNTY) countySet.add(`${STATE.padStart(2,'0')}|${COUNTY.padStart(3,'0')}`);
+    });
+
+    // Fetch ACS for each visible county (cached)
+    const dataMap = new Map();
+    await Promise.all([...countySet].map(async key => {
+      const [state, county] = key.split('|');
+      const cacheKey = `tract|${type}|${state}|${county}`;
+      if (!acsCache[cacheKey]) {
+        acsCache[cacheKey] = await fetchACSTractsForCounty(type, state, county);
+      }
+      acsCache[cacheKey].forEach((v, k) => dataMap.set(k, v));
+    }));
+
+    // GEOID from TIGERweb is the 11-digit tract FIPS
+    activeChoro = makeGeoJSONLayer(
+      tractGeo, dataMap, type,
+      f => (f.properties.GEOID || '').padStart(11, '0')
+    ).addTo(map);
+
+    if (clickMarker) clickMarker.bringToFront();
+  } catch (e) {
+    console.error('Tract choropleth error:', e);
+  } finally {
+    setLayerBtnLoading(type, false);
+  }
+}
+
+async function fetchACSTractsForCounty(type, state, county) {
+  const vars   = ACS_VARS[type];
+  const result = new Map();
+  try {
+    const url = `${CENSUS_ACS}?get=${vars}&for=tract:*&in=state:${state}%20county:${county}`;
+    const r   = await fetch(url);
+    if (r.ok) parseACSIntoMap(await r.json(), type, result, 'tract');
+  } catch (_) {}
+  return result;
+}
+
+// ── ACS parser ────────────────────────────────────────────────
+function parseACSIntoMap(data, type, map, level) {
+  const h      = data[0];
+  const stI    = h.indexOf('state');
+  const coI    = h.indexOf('county');
+  const trI    = h.indexOf('tract');
 
   for (let i = 1; i < data.length; i++) {
-    const row   = data[i];
-    const fips  = row[stateIdx].padStart(2,'0') + row[countyIdx].padStart(3,'0');
-    let   value = 0;
-
-    if (type === 'income') {
-      value = parseInt(row[headers.indexOf('B19013_001E')], 10);
+    const row = data[i];
+    let fips;
+    if (level === 'county') {
+      fips = row[stI].padStart(2,'0') + row[coI].padStart(3,'0');
     } else {
-      const total   = parseInt(row[headers.indexOf('B03002_001E')], 10) || 0;
-      const white   = parseInt(row[headers.indexOf('B03002_003E')], 10) || 0;
+      fips = row[stI].padStart(2,'0') + row[coI].padStart(3,'0') + row[trI].padStart(6,'0');
+    }
+
+    let value = 0;
+    if (type === 'income') {
+      value = parseInt(row[h.indexOf('B19013_001E')], 10);
+    } else {
+      const total = parseInt(row[h.indexOf('B03002_001E')], 10) || 0;
       if (total > 0) {
+        const white = parseInt(row[h.indexOf('B03002_003E')], 10) || 0;
         if (type === 'race') {
           value = (total - white) / total;
         } else {
-          // Simpson's diversity index
           const groups = ['B03002_003E','B03002_004E','B03002_006E',
                           'B03002_005E','B03002_007E','B03002_009E','B03002_012E'];
-          const sumSq = groups.reduce((acc, v) => {
-            const n = parseInt(row[headers.indexOf(v)], 10) || 0;
-            return acc + (n / total) ** 2;
+          const sumSq = groups.reduce((s, v) => {
+            const n = parseInt(row[h.indexOf(v)], 10) || 0;
+            return s + (n / total) ** 2;
           }, 0);
           value = 1 - sumSq;
         }
