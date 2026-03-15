@@ -407,6 +407,19 @@
     }
 
     .leaflet-popup-tip { background: #fff !important; }
+
+    /* Choropleth county tooltip */
+    .choro-tip {
+      background: #fff;
+      border: 1px solid #e8eaed;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      color: #3c4043;
+      font-size: 0.8rem;
+      padding: 6px 10px;
+    }
+
+    .choro-tip::before { display: none; }
   </style>
 </head>
 <body>
@@ -487,6 +500,7 @@
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAoLVpauPJi-aQUnbgDHB8rahwmXXDeizI&libraries=places"></script>
 <script>
 // ── Config ────────────────────────────────────────────────────
@@ -504,22 +518,24 @@ const RACE_COLORS = {
   'Other':                             '#70757a',
 };
 
-// JusticeMap tile layers
-const TILE_LAYERS = {
-  none: null,
-  race: L.tileLayer(
-    'https://www.justicemap.org/tile/county/race/{z}/{x}/{y}.png',
-    { opacity: 0.65, attribution: 'JusticeMap.org' }
-  ),
-  income: L.tileLayer(
-    'https://www.justicemap.org/tile/county/income/{z}/{x}/{y}.png',
-    { opacity: 0.65, attribution: 'JusticeMap.org' }
-  ),
-  diversity: L.tileLayer(
-    'https://www.justicemap.org/tile/county/diversity/{z}/{x}/{y}.png',
-    { opacity: 0.65, attribution: 'JusticeMap.org' }
-  ),
+// ── Choropleth config ─────────────────────────────────────────
+// County boundaries from US Atlas (TopoJSON, ~215 KB, fetched once)
+const US_ATLAS = 'https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json';
+
+// Color buckets (5-step sequential, light → dark)
+const CHORO_SCALES = {
+  income:    ['#edf8e9','#bae4b3','#74c476','#31a354','#006d2c'], // green
+  race:      ['#eff3ff','#bdd7e7','#6baed6','#2171b5','#084594'], // blue
+  diversity: ['#f2f0f7','#cbc9e2','#9e9ac8','#756bb1','#54278f'], // purple
 };
+
+// US state FIPS codes (excluding territories)
+const STATE_FIPS = [
+  '01','02','04','05','06','08','09','10','11','12','13','15','16','17','18',
+  '19','20','21','22','23','24','25','26','27','28','29','30','31','32','33',
+  '34','35','36','37','38','39','40','41','42','44','45','46','47','48','49',
+  '50','51','53','54','55','56',
+];
 
 // ── Map init ──────────────────────────────────────────────────
 const map = L.map('map', {
@@ -537,21 +553,178 @@ L.tileLayer(
   }
 ).addTo(map);
 
-let activeOverlay = null;
-let clickMarker   = null;
+let activeChoro = null;   // current Leaflet GeoJSON choropleth layer
+let clickMarker = null;
+let cachedGeo   = null;   // parsed county GeoJSON (fetched once)
+const cachedACS = {};     // { income: Map<fips,val>, race: Map<fips,val>, diversity: Map<fips,val> }
 
 // ── Layer switcher ────────────────────────────────────────────
 document.querySelectorAll('.layer-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const key = btn.dataset.layer;
-
     document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-
-    if (activeOverlay) { map.removeLayer(activeOverlay); activeOverlay = null; }
-    if (TILE_LAYERS[key]) { TILE_LAYERS[key].addTo(map); activeOverlay = TILE_LAYERS[key]; }
+    if (key === 'none') { clearChoropleth(); } else { showChoropleth(key); }
   });
 });
+
+function clearChoropleth() {
+  if (activeChoro) { map.removeLayer(activeChoro); activeChoro = null; }
+}
+
+// ── Choropleth rendering ──────────────────────────────────────
+async function showChoropleth(type) {
+  clearChoropleth();
+
+  // Set button to loading state
+  const btn = document.querySelector(`.layer-btn[data-layer="${type}"]`);
+  const origText = btn.innerHTML;
+  btn.innerHTML = origText.replace('</span>', '</span>Loading…');
+  btn.disabled = true;
+
+  try {
+    // 1. Fetch county boundaries (once)
+    if (!cachedGeo) cachedGeo = await fetchCountyGeo();
+
+    // 2. Fetch ACS data for this layer (once per type)
+    if (!cachedACS[type]) cachedACS[type] = await fetchACSCounties(type);
+
+    const dataMap = cachedACS[type];
+    const scale   = CHORO_SCALES[type];
+
+    // 3. Build quantile color breaks from the data
+    const vals = [...dataMap.values()].filter(v => v > 0).sort((a, b) => a - b);
+    const breaks = [0, 0.2, 0.4, 0.6, 0.8].map(p =>
+      vals[Math.floor(p * (vals.length - 1))]
+    );
+
+    function getColor(rawId) {
+      const fips = String(rawId).padStart(5, '0');
+      const v    = dataMap.get(fips);
+      if (!v || v <= 0) return '#f0f0f0';
+      for (let i = scale.length - 1; i >= 0; i--) {
+        if (v >= breaks[i]) return scale[i];
+      }
+      return scale[0];
+    }
+
+    function fmtVal(type, v) {
+      if (!v || v <= 0) return 'N/A';
+      if (type === 'income')    return '$' + v.toLocaleString();
+      if (type === 'race')      return (v * 100).toFixed(1) + '% non-white';
+      if (type === 'diversity') return (v * 100).toFixed(1) + '% diversity';
+      return v;
+    }
+
+    // 4. Add GeoJSON layer
+    activeChoro = L.geoJSON(cachedGeo, {
+      style: feature => ({
+        fillColor:   getColor(String(feature.id)),
+        fillOpacity: 0.65,
+        weight:      0.6,
+        color:       '#fff',
+        opacity:     0.5,
+      }),
+      onEachFeature: (feature, layer) => {
+        const fips = String(feature.id).padStart(5, '0');
+        const v    = dataMap.get(fips);
+        layer.bindTooltip(
+          `<b>FIPS ${fips}</b><br/>${fmtVal(type, v)}`,
+          { sticky: true, className: 'choro-tip' }
+        );
+      },
+    }).addTo(map);
+
+    // Ensure click marker stays on top
+    if (clickMarker) clickMarker.bringToFront();
+
+  } catch (err) {
+    console.error('Choropleth error:', err);
+  } finally {
+    btn.innerHTML = origText;
+    btn.disabled = false;
+  }
+}
+
+// ── Data fetchers ─────────────────────────────────────────────
+async function fetchCountyGeo() {
+  const resp = await fetch(US_ATLAS);
+  const topo = await resp.json();
+  // us-atlas county features have numeric `id` (FIPS) but no name property;
+  // we'll label via the ACS data tooltip anyway.
+  return topojson.feature(topo, topo.objects.counties);
+}
+
+async function fetchACSCounties(type) {
+  // Variables per layer type
+  const vars = type === 'income'
+    ? 'B19013_001E'
+    : 'B03002_001E,B03002_003E,B03002_004E,B03002_006E,B03002_005E,B03002_007E,B03002_009E,B03002_012E';
+
+  const result = new Map();
+
+  // Try all-county wildcard first (faster, single request)
+  try {
+    const url = `${CENSUS_ACS}?get=${vars}&for=county:*`;
+    const r   = await fetch(url);
+    if (r.ok) {
+      const data = await r.json();
+      parseACSRows(data, type, result);
+      if (result.size > 100) return result; // success
+    }
+  } catch (_) {}
+
+  // Fallback: fetch per state in parallel batches
+  result.clear();
+  const BATCH = 10;
+  for (let i = 0; i < STATE_FIPS.length; i += BATCH) {
+    const batch = STATE_FIPS.slice(i, i + BATCH);
+    await Promise.all(batch.map(async state => {
+      try {
+        const url = `${CENSUS_ACS}?get=${vars}&for=county:*&in=state:${state}`;
+        const r   = await fetch(url);
+        if (!r.ok) return;
+        const data = await r.json();
+        parseACSRows(data, type, result);
+      } catch (_) {}
+    }));
+  }
+  return result;
+}
+
+function parseACSRows(data, type, map) {
+  const headers = data[0];
+  const stateIdx  = headers.indexOf('state');
+  const countyIdx = headers.indexOf('county');
+
+  for (let i = 1; i < data.length; i++) {
+    const row   = data[i];
+    const fips  = row[stateIdx].padStart(2,'0') + row[countyIdx].padStart(3,'0');
+    let   value = 0;
+
+    if (type === 'income') {
+      value = parseInt(row[headers.indexOf('B19013_001E')], 10);
+    } else {
+      const total   = parseInt(row[headers.indexOf('B03002_001E')], 10) || 0;
+      const white   = parseInt(row[headers.indexOf('B03002_003E')], 10) || 0;
+      if (total > 0) {
+        if (type === 'race') {
+          value = (total - white) / total;
+        } else {
+          // Simpson's diversity index
+          const groups = ['B03002_003E','B03002_004E','B03002_006E',
+                          'B03002_005E','B03002_007E','B03002_009E','B03002_012E'];
+          const sumSq = groups.reduce((acc, v) => {
+            const n = parseInt(row[headers.indexOf(v)], 10) || 0;
+            return acc + (n / total) ** 2;
+          }, 0);
+          value = 1 - sumSq;
+        }
+      }
+    }
+    if (value > 0) map.set(fips, value);
+  }
+}
 
 // ── Google Places Autocomplete ────────────────────────────────
 const inputEl      = document.getElementById('address-input');
