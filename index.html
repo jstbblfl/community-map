@@ -420,6 +420,33 @@
     }
 
     .choro-tip::before { display: none; }
+
+    /* Rent data grid */
+    .rent-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .rent-cell { text-align: center; }
+
+    .rent-cell .rent-label {
+      font-size: 0.63rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #70757a;
+    }
+
+    .rent-cell .rent-value {
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: #3c4043;
+      margin-top: 3px;
+    }
+
+    .rent-cell .rent-value.section8 { color: #1a73e8; }
   </style>
 </head>
 <body>
@@ -491,6 +518,17 @@
         <h3>Race &amp; Ethnicity</h3>
         <div id="race-bars"></div>
       </div>
+
+      <div class="demo-card" id="fmr-card" style="display:none">
+        <h3>Section 8 Limits — HUD FMR FY2025</h3>
+        <div id="fmr-rows"></div>
+      </div>
+
+      <div class="demo-card" id="rent-card" style="display:none">
+        <h3>Market Rents — ACS 2023</h3>
+        <div id="rent-rows"></div>
+        <div class="income-sub" style="margin-top:8px">All rental types · Census Tract</div>
+      </div>
     </div>
   </div>
 
@@ -501,11 +539,10 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
-<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAoLVpauPJi-aQUnbgDHB8rahwmXXDeizI&libraries=places"></script>
 <script>
 // ── Config ────────────────────────────────────────────────────
 const TIGERWEB   = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2022/MapServer/6/query';
-const CENSUS_ACS = 'https://api.census.gov/data/2022/acs/acs5';
+const CENSUS_ACS = 'https://api.census.gov/data/2023/acs/acs5';
 
 const RACE_COLORS = {
   'White (non-Hispanic)':              '#1a73e8',
@@ -837,66 +874,44 @@ function parseACSIntoMap(data, type, map, level) {
   }
 }
 
-// ── Google Places Autocomplete ────────────────────────────────
+// ── Mapbox Autocomplete ───────────────────────────────────────
 const inputEl      = document.getElementById('address-input');
 const suggestEl    = document.getElementById('suggestions');
 const searchStatus = document.getElementById('search-status');
 const searchWrap   = document.getElementById('search-wrap');
 
-let debounceTimer   = null;
-let predictions     = [];   // current google.maps.places.AutocompletePrediction[]
-let activeIdx       = -1;
-let autoSvc         = null;
-let placesSvc       = null;
+let debounceTimer = null;
+let predictions   = [];   // current Mapbox feature array
+let activeIdx     = -1;
 
-// Init Google services once the Maps API is ready
-function initGoogleServices() {
-  autoSvc   = new google.maps.places.AutocompleteService();
-  // PlacesService requires a DOM node; use a hidden div
-  const div = document.createElement('div');
-  placesSvc = new google.maps.places.PlacesService(div);
-}
-
-if (window.google?.maps) {
-  initGoogleServices();
-} else {
-  // Maps API loads async — wait for it
-  const waitGmaps = setInterval(() => {
-    if (window.google?.maps?.places) { clearInterval(waitGmaps); initGoogleServices(); }
-  }, 100);
-}
-
-// ── Predictions ───────────────────────────────────────────────
-function fetchPredictions(q) {
-  if (!autoSvc || q.length < 2) { closeSuggestions(); return; }
-
-  autoSvc.getPlacePredictions(
-    { input: q, componentRestrictions: { country: 'us' } },
-    (preds, status) => {
-      predictions = (status === google.maps.places.PlacesServiceStatus.OK && preds) ? preds : [];
-      activeIdx   = -1;
-      renderSuggestions(predictions);
-    }
-  );
+async function fetchSuggestions(q) {
+  if (q.length < 1) { closeSuggestions(); return; }
+  try {
+    const r    = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`);
+    const data = await r.json();
+    predictions = data.features || [];
+    activeIdx   = -1;
+    renderSuggestions(predictions);
+  } catch (_) { closeSuggestions(); }
 }
 
 // ── Rendering ─────────────────────────────────────────────────
-function renderSuggestions(preds) {
+function renderSuggestions(features) {
   suggestEl.innerHTML = '';
-  if (!preds.length) { suggestEl.classList.remove('open'); return; }
+  if (!features.length) { suggestEl.classList.remove('open'); return; }
 
-  preds.forEach((p, i) => {
-    const main = p.structured_formatting?.main_text   || p.description;
-    const sub  = p.structured_formatting?.secondary_text || '';
+  features.forEach((f, i) => {
+    const main = f.text || f.place_name;
+    const sub  = f.place_name.replace(f.text + ', ', '');
     const item = document.createElement('div');
     item.className = 'suggestion-item';
     item.innerHTML = `
       <div class="suggestion-text">
         <div class="suggestion-main">${escHtml(main)}</div>
-        ${sub ? `<div class="suggestion-sub">${escHtml(sub)}</div>` : ''}
+        ${sub !== main ? `<div class="suggestion-sub">${escHtml(sub)}</div>` : ''}
       </div>
     `;
-    item.addEventListener('mousedown', e => { e.preventDefault(); selectPrediction(p); });
+    item.addEventListener('mousedown', e => { e.preventDefault(); selectSuggestion(f); });
     item.addEventListener('mouseover',  () => setActive(i));
     suggestEl.appendChild(item);
   });
@@ -922,38 +937,29 @@ function escHtml(s) {
 }
 
 // ── Selection ─────────────────────────────────────────────────
-function selectPrediction(pred) {
+function selectSuggestion(feature) {
   clearTimeout(debounceTimer);
-  inputEl.value = pred.description;
+  inputEl.value = feature.place_name;
   closeSuggestions();
   searchStatus.textContent = '';
 
-  placesSvc.getDetails(
-    { placeId: pred.place_id, fields: ['geometry', 'types'] },
-    (place, status) => {
-      if (status !== google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
-        searchStatus.textContent = 'Could not get coordinates for this address.';
-        searchStatus.style.color = '#e53e3e';
-        return;
-      }
-      const loc    = place.geometry.location;
-      const latlng = L.latLng(loc.lat(), loc.lng());
+  const [lng, lat] = feature.center;
+  const latlng     = L.latLng(lat, lng);
 
-      // Zoom: street address → 16, city → 12, state → 7
-      const types = place.types || [];
-      const zoom  = types.includes('street_address') || types.includes('premise') ? 16
-                  : types.includes('locality') ? 12
-                  : types.includes('administrative_area_level_1') ? 7 : 14;
+  // Zoom by place type
+  const type = feature.place_type?.[0];
+  const zoom = type === 'address'   ? 16
+             : type === 'place'     ? 12
+             : type === 'region'    ? 7
+             : type === 'postcode'  ? 13
+             : 14;
 
-      map.setView(latlng, zoom);
+  map.setView(latlng, zoom);
 
-      // Drop a pin at the exact address location
-      if (addressPin) { map.removeLayer(addressPin); addressPin = null; }
-      addressPin = L.marker(latlng).addTo(map);
+  if (addressPin) { map.removeLayer(addressPin); addressPin = null; }
+  addressPin = L.marker(latlng).addTo(map);
 
-      loadDemographics(latlng);
-    }
-  );
+  loadDemographics(latlng);
 }
 
 function goSearch() {
@@ -961,30 +967,31 @@ function goSearch() {
   const q = inputEl.value.trim();
   if (!q) return;
 
-  // Use the highlighted or first prediction if available
   if (predictions.length > 0) {
-    selectPrediction(predictions[activeIdx >= 0 ? activeIdx : 0]);
+    selectSuggestion(predictions[activeIdx >= 0 ? activeIdx : 0]);
     return;
   }
 
-  // No predictions yet — fetch now and take the top result
-  if (!autoSvc) { searchStatus.textContent = 'Search not ready yet.'; return; }
   searchStatus.textContent = 'Searching…';
   searchStatus.style.color = '#718096';
 
-  autoSvc.getPlacePredictions(
-    { input: q, componentRestrictions: { country: 'us' } },
-    (preds, status) => {
-      if (status !== google.maps.places.PlacesServiceStatus.OK || !preds?.length) {
+  fetch(`/api/suggest?q=${encodeURIComponent(q)}`)
+    .then(r => r.json())
+    .then(data => {
+      const features = data.features || [];
+      if (!features.length) {
         searchStatus.textContent = 'Address not found.';
         searchStatus.style.color = '#e53e3e';
         return;
       }
       searchStatus.textContent = '';
-      predictions = preds;
-      selectPrediction(preds[0]);
-    }
-  );
+      predictions = features;
+      selectSuggestion(features[0]);
+    })
+    .catch(() => {
+      searchStatus.textContent = 'Search error.';
+      searchStatus.style.color = '#e53e3e';
+    });
 }
 
 // ── Events ────────────────────────────────────────────────────
@@ -992,8 +999,8 @@ inputEl.addEventListener('input', () => {
   const q = inputEl.value.trim();
   searchStatus.textContent = '';
   clearTimeout(debounceTimer);
-  if (q.length < 2) { closeSuggestions(); predictions = []; return; }
-  debounceTimer = setTimeout(() => fetchPredictions(q), 200);
+  if (q.length < 1) { closeSuggestions(); predictions = []; return; }
+  debounceTimer = setTimeout(() => fetchSuggestions(q), 150);
 });
 
 inputEl.addEventListener('keydown', e => {
@@ -1049,10 +1056,12 @@ async function loadDemographics(latlng) {
   if (clickMarker) { map.removeLayer(clickMarker); clickMarker = null; }
 
   showLoading('Locating census tract…');
+  document.getElementById('fmr-card').style.display  = 'none';
+  document.getElementById('rent-card').style.display = 'none';
 
   try {
     // Step 1 – Census TIGERweb REST API: coordinates → tract polygon + FIPS codes
-    document.getElementById('loading-step').textContent = 'Step 1/3 · Locating census tract…';
+    document.getElementById('loading-step').textContent = 'Step 1/4 · Locating census tract…';
 
     const tigerParams = new URLSearchParams({
       geometry:        `${lng},${lat}`,
@@ -1092,7 +1101,7 @@ async function loadDemographics(latlng) {
     const tractId  = attrs.TRACT;
     const tractName = attrs.NAME || `Census Tract ${attrs.BASENAME}`;
 
-    document.getElementById('loading-step').textContent = 'Step 2/3 · Fetching ACS income data…';
+    document.getElementById('loading-step').textContent = 'Step 2/4 · Fetching ACS income data…';
 
     // Step 2a – Median household income (B19013_001E)
     const incomeUrl = `${CENSUS_ACS}?get=B19013_001E,NAME&for=tract:${tractId}&in=state:${state}%20county:${county}`;
@@ -1106,7 +1115,7 @@ async function loadDemographics(latlng) {
     const incomeVal  = parseInt(incomeData[1][incomeIdx], 10);
     const areaName   = incomeData[1][nameIdx] || `Tract ${tractName}`;
 
-    document.getElementById('loading-step').textContent = 'Step 3/3 · Fetching ACS race data…';
+    document.getElementById('loading-step').textContent = 'Step 3/4 · Fetching ACS race data…';
 
     // Step 2b – Race variables
     // B03002: Hispanic/Latino origin by race
@@ -1171,6 +1180,60 @@ async function loadDemographics(latlng) {
         <div class="race-pct">${pct.toFixed(1)}%</div>
       `;
       raceBarsEl.appendChild(row);
+    }
+
+    // Step 4 – Rent data: ACS B25031 (market) + HUD FMR (Section 8) in parallel
+    document.getElementById('loading-step').textContent = 'Step 4/4 · Fetching rent data…';
+
+    const rentVars = 'B25031_001E,B25031_002E,B25031_003E,B25031_004E,B25031_005E,B25031_006E';
+    const [rentResult, fmrResult] = await Promise.allSettled([
+      fetch(`${CENSUS_ACS}?get=${rentVars}&for=tract:${tractId}&in=state:${state}%20county:${county}`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`ACS rent HTTP ${r.status}`))),
+      fetch(`/api/fmr?state=${state}&county=${county}`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`FMR HTTP ${r.status}`))),
+    ]);
+
+    // Render ACS market rents
+    const rentCard = document.getElementById('rent-card');
+    const rentRows = document.getElementById('rent-rows');
+    if (rentResult.status === 'fulfilled') {
+      const rd = rentResult.value;
+      const rh = rd[0]; const rv = rd[1];
+      const rval = key => { const i = rh.indexOf(key); return i >= 0 ? parseInt(rv[i], 10) : -1; };
+      const labels  = ['Studio', '1BR', '2BR', '3BR', '4BR'];
+      const varKeys = ['B25031_002E','B25031_003E','B25031_004E','B25031_005E','B25031_006E'];
+      const cells = varKeys.map((k, i) => {
+        const v = rval(k);
+        const display = (v > 0) ? '$' + v.toLocaleString() : 'N/A';
+        return `<div class="rent-cell"><div class="rent-label">${labels[i]}</div><div class="rent-value">${display}</div></div>`;
+      }).join('');
+      rentRows.innerHTML = `<div class="rent-grid">${cells}</div>`;
+      rentCard.style.display = '';
+    } else {
+      rentCard.style.display = 'none';
+    }
+
+    // Render HUD FMR Section 8 rents
+    const fmrCard = document.getElementById('fmr-card');
+    const fmrRows = document.getElementById('fmr-rows');
+    if (fmrResult.status === 'fulfilled') {
+      const fd = fmrResult.value;
+      const basic = fd?.data?.basicdata?.[0];
+      if (basic) {
+        const labels   = ['Studio', '1BR', '2BR', '3BR', '4BR'];
+        const fmrKeys  = ['Efficiency', 'One-Bedroom', 'Two-Bedroom', 'Three-Bedroom', 'Four-Bedroom'];
+        const cells = fmrKeys.map((k, i) => {
+          const v = basic[k];
+          const display = (v != null && v > 0) ? '$' + Math.round(v).toLocaleString() : 'N/A';
+          return `<div class="rent-cell"><div class="rent-label">${labels[i]}</div><div class="rent-value section8">${display}</div></div>`;
+        }).join('');
+        fmrRows.innerHTML = `<div class="rent-grid">${cells}</div>`;
+        fmrCard.style.display = '';
+      } else {
+        fmrCard.style.display = 'none';
+      }
+    } else {
+      fmrCard.style.display = 'none';
     }
 
     showContent();
