@@ -82,7 +82,8 @@ app.get('/api/fmr', async (req, res) => {
   const token = process.env.HUD_TOKEN;
   if (!token) return res.status(500).json({ error: 'HUD_TOKEN not set in .env' });
 
-  const fips = state.padStart(2, '0') + county.padStart(3, '0');
+  // HUD uses a 10-digit entity code: {state_fips}{county_fips}99999
+  const fips = state.padStart(2, '0') + county.padStart(3, '0') + '99999';
   const cleanToken = token.replace(/^Bearer\s+/i, '');
   try {
     const url = `https://www.huduser.gov/hudapi/public/fmr/data/${fips}?year=2025`;
