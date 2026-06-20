@@ -88,8 +88,15 @@ app.get('/api/fmr', async (req, res) => {
     const upstream = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!upstream.ok) return res.status(upstream.status).json({ error: 'HUD API error' });
-    res.json(await upstream.json());
+    const body = await upstream.text();
+    if (!upstream.ok) {
+      // 400/401 from HUD usually means expired token — surface the body for diagnosis
+      return res.status(upstream.status).json({
+        error: `HUD API ${upstream.status} — token may be expired. Regenerate at huduser.gov`,
+        detail: body.slice(0, 300),
+      });
+    }
+    res.json(JSON.parse(body));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -101,14 +108,26 @@ app.get('/api/fmr', async (req, res) => {
  * Keeps CENSUS_KEY out of the browser and committed code.
  */
 app.get('/api/acs', async (req, res) => {
-  const params = new URLSearchParams(req.query);
   const key = process.env.CENSUS_KEY;
-  if (key) params.set('key', key);
+  if (!key) return res.status(500).json({ error: 'CENSUS_KEY not set in .env — get a free key at https://api.census.gov/data/key_signup.html' });
+
+  const params = new URLSearchParams(req.query);
+  params.set('key', key);
   const url = `https://api.census.gov/data/2023/acs/acs5?${params}`;
   try {
     const upstream = await fetch(url);
+    const contentType = upstream.headers.get('content-type') || '';
+    const body = await upstream.text();
+
+    // Census returns HTML when key is invalid — detect and surface a clear error
+    if (contentType.includes('text/html') || body.trimStart().startsWith('<')) {
+      return res.status(401).json({
+        error: 'Census API rejected the key — check CENSUS_KEY in .env (get/reactivate at https://api.census.gov/data/key_signup.html)',
+      });
+    }
+
     if (!upstream.ok) return res.status(upstream.status).json({ error: `Census ACS error ${upstream.status}` });
-    res.json(await upstream.json());
+    res.json(JSON.parse(body));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
