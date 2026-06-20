@@ -95,6 +95,42 @@ app.get('/api/fmr', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/acs?get=<vars>&for=<geo>&in=<filter>
+ * Proxies Census ACS 5-year API — appends API key server-side.
+ * Keeps CENSUS_KEY out of the browser and committed code.
+ */
+app.get('/api/acs', async (req, res) => {
+  const params = new URLSearchParams(req.query);
+  const key = process.env.CENSUS_KEY;
+  if (key) params.set('key', key);
+  const url = `https://api.census.gov/data/2023/acs/acs5?${params}`;
+  try {
+    const upstream = await fetch(url);
+    if (!upstream.ok) return res.status(upstream.status).json({ error: `Census ACS error ${upstream.status}` });
+    res.json(await upstream.json());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/tiger?<TIGERweb params>
+ * Proxies Census TIGERweb ACS2023 MapServer (Census Tracts layer 8).
+ * Avoids CORS issues — browser only ever calls same-origin localhost.
+ */
+app.get('/api/tiger', async (req, res) => {
+  const params = new URLSearchParams(req.query);
+  const url = `https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2023/MapServer/8/query?${params}`;
+  try {
+    const upstream = await fetch(url);
+    if (!upstream.ok) return res.status(upstream.status).json({ error: 'TIGERweb error' });
+    res.json(await upstream.json());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.error(`Serving http://localhost:${PORT}`);
 });
