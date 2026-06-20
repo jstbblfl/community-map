@@ -15,8 +15,8 @@ const TRACT   = '003500';
 const LNG     = -84.388;
 const LAT     = 33.749;
 
-const TIGERWEB   = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2023/MapServer/8/query';
-const CENSUS_ACS = 'https://api.census.gov/data/2023/acs/acs5';
+const TIGERWEB   = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2024/MapServer/8/query';
+const CENSUS_ACS = 'https://api.census.gov/data/2024/acs/acs5';
 const HUD_API    = 'https://www.huduser.gov/hudapi/public/fmr/data';
 const MAPBOX_API = 'https://api.mapbox.com/geocoding/v5/mapbox.places';
 
@@ -33,7 +33,7 @@ async function apiFetch(url, opts = {}) {
 
 // ── TIGERweb ─────────────────────────────────────────────────────────────────
 
-test('TIGERweb ACS2023/layer8 — Atlanta GA returns correct tract', async () => {
+test('TIGERweb ACS2024/layer8 — Atlanta GA returns correct tract', async () => {
   const params = new URLSearchParams({
     geometry:       `${LNG},${LAT}`,
     geometryType:   'esriGeometryPoint',
@@ -50,9 +50,9 @@ test('TIGERweb ACS2023/layer8 — Atlanta GA returns correct tract', async () =>
   assert.equal(body.features[0].attributes.COUNTY, COUNTY, 'Wrong county returned');
 });
 
-// ── Census ACS 2023 ───────────────────────────────────────────────────────────
+// ── Census ACS 2024 ───────────────────────────────────────────────────────────
 
-test('Census ACS 2023 — median income (B19013) for Atlanta tract', async () => {
+test('Census ACS 2024 — median income (B19013) for Atlanta tract', async () => {
   assert.ok(CENSUS_KEY, 'CENSUS_KEY not set — get a free key at https://api.census.gov/data/key_signup.html');
   const url = `${CENSUS_ACS}?get=B19013_001E,NAME&for=tract:${TRACT}&in=state:${STATE}%20county:${COUNTY}&key=${CENSUS_KEY}`;
   const { status, ok, body } = await apiFetch(url);
@@ -62,7 +62,7 @@ test('Census ACS 2023 — median income (B19013) for Atlanta tract', async () =>
   assert.ok(income > 0, `Expected positive income, got ${income}`);
 });
 
-test('Census ACS 2023 — rent by bedrooms (B25031) for Atlanta tract', async () => {
+test('Census ACS 2024 — rent by bedrooms (B25031) for Atlanta tract', async () => {
   assert.ok(CENSUS_KEY, 'CENSUS_KEY not set');
   const vars = 'B25031_002E,B25031_003E,B25031_004E,B25031_005E,B25031_006E';
   const url = `${CENSUS_ACS}?get=${vars}&for=tract:${TRACT}&in=state:${STATE}%20county:${COUNTY}&key=${CENSUS_KEY}`;
@@ -73,7 +73,7 @@ test('Census ACS 2023 — rent by bedrooms (B25031) for Atlanta tract', async ()
   assert.ok(twoBR > 0, `Expected positive 2BR rent, got ${twoBR}`);
 });
 
-test('Census ACS 2023 — race variables (B03002) for Atlanta tract', async () => {
+test('Census ACS 2024 — race variables (B03002) for Atlanta tract', async () => {
   assert.ok(CENSUS_KEY, 'CENSUS_KEY not set');
   const vars = 'B03002_001E,B03002_003E,B03002_012E';
   const url = `${CENSUS_ACS}?get=${vars}&for=tract:${TRACT}&in=state:${STATE}%20county:${COUNTY}&key=${CENSUS_KEY}`;

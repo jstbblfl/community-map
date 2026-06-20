@@ -111,7 +111,7 @@ app.get('/api/acs', async (req, res) => {
 
   const params = new URLSearchParams(req.query);
   params.set('key', key);
-  const url = `https://api.census.gov/data/2023/acs/acs5?${params}`;
+  const url = `https://api.census.gov/data/2024/acs/acs5?${params}`;
   try {
     const upstream = await fetch(url);
     const contentType = upstream.headers.get('content-type') || '';
@@ -133,12 +133,12 @@ app.get('/api/acs', async (req, res) => {
 
 /**
  * GET /api/tiger?<TIGERweb params>
- * Proxies Census TIGERweb ACS2023 MapServer (Census Tracts layer 8).
+ * Proxies Census TIGERweb ACS2024 MapServer (Census Tracts layer 8).
  * Avoids CORS issues — browser only ever calls same-origin localhost.
  */
 app.get('/api/tiger', async (req, res) => {
   const params = new URLSearchParams(req.query);
-  const url = `https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2023/MapServer/8/query?${params}`;
+  const url = `https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2024/MapServer/8/query?${params}`;
   try {
     const upstream = await fetch(url);
     if (!upstream.ok) return res.status(upstream.status).json({ error: 'TIGERweb error' });
