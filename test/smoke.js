@@ -90,8 +90,9 @@ test('HUD FMR — Fulton County GA Section 8 rents', async () => {
   const token = process.env.HUD_TOKEN;
   assert.ok(token, 'HUD_TOKEN not set — add it to .env');
   const fips = STATE.padStart(2, '0') + COUNTY.padStart(3, '0');
-  const { status, ok, body } = await apiFetch(`${HUD_API}/${fips}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const cleanToken = token.replace(/^Bearer\s+/i, '');
+  const { status, ok, body } = await apiFetch(`${HUD_API}/${fips}?year=2025`, {
+    headers: { Authorization: `Bearer ${cleanToken}` },
   });
   assert.ok(ok, `HUD API HTTP ${status} — ${JSON.stringify(body).slice(0, 300)}${status === 400 || status === 401 ? ' → token likely expired, regenerate at huduser.gov' : ''}`);
   const basic = body?.data?.basicdata?.[0];

@@ -83,18 +83,15 @@ app.get('/api/fmr', async (req, res) => {
   if (!token) return res.status(500).json({ error: 'HUD_TOKEN not set in .env' });
 
   const fips = state.padStart(2, '0') + county.padStart(3, '0');
+  const cleanToken = token.replace(/^Bearer\s+/i, '');
   try {
-    const url = `https://www.huduser.gov/hudapi/public/fmr/data/${fips}`;
+    const url = `https://www.huduser.gov/hudapi/public/fmr/data/${fips}?year=2025`;
     const upstream = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${cleanToken}` },
     });
     const body = await upstream.text();
     if (!upstream.ok) {
-      // 400/401 from HUD usually means expired token — surface the body for diagnosis
-      return res.status(upstream.status).json({
-        error: `HUD API ${upstream.status} — token may be expired. Regenerate at huduser.gov`,
-        detail: body.slice(0, 300),
-      });
+      return res.status(upstream.status).json({ error: `HUD API ${upstream.status}`, detail: body.slice(0, 300) });
     }
     res.json(JSON.parse(body));
   } catch (err) {
