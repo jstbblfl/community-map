@@ -541,7 +541,7 @@
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <script>
 // ── Config ────────────────────────────────────────────────────
-const TIGERWEB   = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb//api/tiger';
+const TIGERWEB   = '/api/tiger';
 const CENSUS_ACS = '/api/acs';
 
 const RACE_COLORS = {
@@ -562,8 +562,8 @@ const US_ATLAS = 'https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json';
 // At zoom >= TRACT_ZOOM switch from counties → census tracts
 const TRACT_ZOOM = 8;
 
-// TIGERweb layer 6 = Census Tracts (same endpoint used for point lookup)
-const TIGERWEB_TRACTS = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb//api/tiger';
+// TIGERweb layer 8 = Census Tracts (proxied through /api/tiger to avoid CORS)
+const TIGERWEB_TRACTS = '/api/tiger';
 
 // Color buckets (5-step sequential, light → dark)
 const CHORO_SCALES = {
